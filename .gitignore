@@ -1,0 +1,5 @@
+esphome/.esphome
+esphome/secrets.yaml
+esphome/venv/*
+
+kicad/project/radwag_scale-backups
