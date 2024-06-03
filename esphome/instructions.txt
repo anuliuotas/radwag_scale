@@ -1,0 +1,9 @@
+Admin PW: 1111
+
+For push mode:
+Prameters -> Peripherals -> Computer -> COM 1. Siuntimo greitis tame pačiame lange apačioje.
+Prameters -> Peripherals -> Computer -> Continous transmission -> Current unit
+
+For pull mode:
+Prameters -> Peripherals -> Computer -> COM 1.
+Prameters -> Peripherals -> Computer -> Continous transmission -> None

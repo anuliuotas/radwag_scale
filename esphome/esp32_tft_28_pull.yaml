@@ -1,0 +1,242 @@
+substitutions:
+  device_name: "testing"
+  friendly_name: "testing"
+  mqqt_root_topic: "testing"
+  mqqt_retain_message: "false"
+
+esphome:
+  name: ${device_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+sensor:
+  - platform: template
+    id: weight_value
+    unit_of_measurement: "g"
+
+globals:
+  - id: weight_stable
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: uom_string
+    type: std::string
+    initial_value: ""
+    restore_value: no
+
+
+uart:
+ - id: uart_bus1
+   tx_pin: GPIO22
+   rx_pin: GPIO27
+   baud_rate: 4800
+   parity: NONE
+   debug:
+     direction: RX
+     dummy_receiver: true
+     sequence:
+        - lambda: UARTDebug::log_string(direction, bytes);
+        - lambda: |-
+            std::string str(bytes.begin(), bytes.end());
+
+            // SPLIT STRING INTO RESPONSES
+
+            std::string delimiter = "\r\n";
+
+            std::vector<std::string> tokens;
+            size_t start = 0;
+            size_t end = str.find(delimiter);
+            
+            while (end != std::string::npos) {
+                tokens.push_back(str.substr(start, end - start));
+                start = end + delimiter.length();
+                end = str.find(delimiter, start);
+            }
+            tokens.push_back(str.substr(start));
+
+            // PARSE RESPONSES
+            std::string str_sui_unstable_mv = "SUI?";
+            std::string str_sui_stable_mv = "SUI";
+            std::string valid_end = "g";  // Check if contains g, because its valid for both kg and g
+
+            for (const std::string& s : tokens) {
+                if (!s.empty()) {
+                  //ESP_LOGW("SEARCH_STR", "%s", s.c_str());
+                
+                
+                  bool stable_measurement = false;
+                  bool measurement_valid = false;
+
+                  // ? indicates that the measurement are not stable
+                  if ((s.find(str_sui_unstable_mv) != std::string::npos) and (s.find(valid_end) != std::string::npos)) {
+                    // "SUI?     854.21 g"
+                    //ESP_LOGW("SEARCH_STR", "-- SUI?");
+
+                    measurement_valid = true;
+                    stable_measurement = false;
+                  } else if ((s.find(str_sui_stable_mv) != std::string::npos) and (s.find(valid_end) != std::string::npos)) {
+                    // "SUI     854.21 g"
+                    //ESP_LOGW("SEARCH_STR", "-- SUI");
+
+                    measurement_valid = true;
+                    stable_measurement = true;
+                  }
+
+                  if (measurement_valid) {
+                      id(weight_stable) = stable_measurement;
+
+                      std::string resultStr;
+                      bool foundDigit = false;
+
+                      bool is_negative = false;
+                      for (char c : str) {
+                        if(c == '-') {
+                          is_negative = true;
+                        } else {
+                          if (isdigit(c) || c == '.') {
+                              resultStr += c;
+                              if (c != '.') {
+                                foundDigit = true;
+                              }
+                          } else {
+                            if (foundDigit) {
+                              break;
+                            }  
+                          }
+                        }  
+                      }
+
+                      if (str.find(" g") != std::string::npos) {
+                        id(uom_string) = str.substr(str.find(" g"), 2);  
+                        //ESP_LOGI("SCALES G", "The value of uom is: %s", uom.c_str());
+                      } else {
+                        if (str.find(" kg") != std::string::npos) {
+                          id(uom_string) = str.substr(str.find(" kg"), 3);  
+                          //ESP_LOGI("SCALES KG", "The value of uom is: %s", uom.c_str());
+                        }  
+                      }
+                      //ESP_LOGI("SCALES", "The value of uom is: %s", id(uom_string).c_str());
+
+                      if (foundDigit) {
+                        double number = stod(resultStr);
+                        if (is_negative) {
+                          number = number * -1;
+                        }
+                        id(weight_value).publish_state(number); 
+                        //ESP_LOGD("VAL", "value: %s", id(weight_value).state);
+                      }
+                    }
+                  }
+                }
+
+            
+            
+
+
+logger:
+  level: DEBUG
+
+
+spi:
+  - id: lcd
+    clk_pin: GPIO14
+    mosi_pin: GPIO13
+    miso_pin: GPIO12
+  
+
+output:
+  - platform: ledc
+    pin: GPIO21
+    id: former_led_pin
+
+
+light:
+  - platform: monochromatic
+    output: former_led_pin
+    name: "Display Backlight"
+    id: back_light
+    restore_mode: ALWAYS_ON
+
+font:
+  - file: "fonts/Consolas/CONSOLA.ttf"
+    id: text_font
+    size: 26
+
+
+color:
+  - id: my_color
+    red: 100%
+    green: 0%
+    blue: 0%
+  
+
+qr_code:
+  - id: weight_qr
+    value: esphome.io
+
+
+interval:
+  - interval: 0.25s
+    then:
+      - uart.write:
+          id: uart_bus1
+          data: "SUI\r\n"  # Send stable measurement result in current measuring unit
+          # data: [0x53, 0x55, 0x0D, 0x0A]
+
+  - interval: 0.25s
+    then:
+      lambda: |-        
+        char buffer[50]; sprintf(buffer, "%.2f", id(weight_value).state);
+        weight_qr->set_value(std::string(buffer));
+
+        //weight_qr->set_value(std::string(id(weight_value).state));
+
+image:
+  - file: "ameralabs_logo.png"
+    id: logo
+    resize: 200x200
+
+
+display:
+  - platform: ili9xxx
+    model: ILI9486
+    spi_id: lcd
+    dc_pin: 2
+    cs_pin: 15
+    color_order: rgb
+    color_palette: GRAYSCALE
+    invert_colors: true
+    transform:
+      mirror_x: true
+      mirror_y: true
+    update_interval: 0.5s
+    dimensions:
+      height: 320
+      width: 240
+    lambda: |-
+  
+      it.fill(Color::BLACK);
+
+      if (isnan(id(weight_value).state)) {
+        it.image(20, 40, id(logo));
+        it.printf(30, 270, id(text_font), id(my_color), "Connecting...");
+      } else {
+        if (id(weight_stable)) {
+          it.qr_code(30, 40, id(weight_qr), id(my_color), 8);
+        } 
+
+        if (id(uom_string) == " g") {
+          it.printf(40, 270, id(text_font), id(my_color), "%8.2f%s", id(weight_value).state, id(uom_string).c_str());
+        } else {
+          if (id(uom_string) == " kg") {
+            it.printf(40, 270, id(text_font), id(my_color), "%8.5f%s", id(weight_value).state, id(uom_string).c_str());
+          }     
+        }
+      }
+
+     
+
+    
